@@ -1,16 +1,17 @@
 package com.canto.firstspirit.integration.dap;
-import static com.canto.firstspirit.service.CantoSaasServiceConfigurable.PARAM_TENANT;
 
 import com.canto.firstspirit.config.CantoProjectApp;
 import com.canto.firstspirit.integration.dap.model.CantoDAPAsset;
-import com.canto.firstspirit.service.CantoSaasServiceConfigurable;
+import com.canto.firstspirit.service.server.CantoSaasService;
+import com.canto.firstspirit.service.server.model.CantoConfiguration;
 import com.espirit.moddev.components.annotations.PublicComponent;
-import com.espirit.ps.psci.genericconfiguration.Values;
 import com.espirit.ps.psci.magicicons.MagicIcon;
 import com.espirit.ps.psci.magicicons.usages.ReportIcon;
 import de.espirit.firstspirit.access.BaseContext;
+import de.espirit.firstspirit.access.ServicesBroker;
 import de.espirit.firstspirit.agency.Image;
 import de.espirit.firstspirit.agency.ImageAgent;
+import de.espirit.firstspirit.agency.ProjectAgent;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataAccessPlugin;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataAccessSessionBuilder;
 import de.espirit.firstspirit.client.plugin.dataaccess.aspects.DataAccessAspectMap;
@@ -57,8 +58,10 @@ public class CantoDAP implements DataAccessPlugin<CantoDAPAsset>, Reporting, Rep
       aspectMap.put(Reporting.TYPE, this);
       aspectMap.put(ReportItemsProviding.TYPE, this);
 
-      this.tenant = CantoSaasServiceConfigurable.PARAM_TENANT;
-
+      long projectId = baseContext.requireSpecialist(ProjectAgent.TYPE).getId();
+      CantoSaasService cantoSaasService = baseContext.requireSpecialist(ServicesBroker.TYPE).getService(CantoSaasService.class);
+      CantoConfiguration configuration = cantoSaasService.getConfiguration(projectId);
+      this.tenant = configuration.getTenant();
     }
   }
 
