@@ -45,6 +45,7 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
   private @Nullable RequestLimiter singleFetchRequestLimiter = null;
   private @Nullable RequestLimiter batchFetchRequestLimiter = null;
+  private @Nullable RequestLimiter searchRequestLimiter = null;
 
   private ServiceConfiguration serviceConfiguration;
 
@@ -52,7 +53,17 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     final CantoServiceConnection connection = CantoServiceConnection.fromConfig(config);
     if (!apiConnectionPool.containsKey(connection.getConnectionId())) {
 
-      final CantoApi cantoApi = new CantoApi(config.getTenant(), config.getOAuthBaseUrl(), config.getAppId(), config.getAppSecret(), config.getUserId(), singleFetchRequestLimiter, batchFetchRequestLimiter, new ProjectBoundCacheAccess(centralCache));
+      final CantoApi cantoApi = new CantoApi.Builder()
+              .tenant(config.getTenant())
+              .oAuthBaseUrl(config.getOAuthBaseUrl())
+              .appId(config.getAppId())
+              .appSecret(config.getAppSecret())
+              .userId(config.getUserId())
+              .singleFetchRequestLimiter(singleFetchRequestLimiter)
+              .batchFetchRequestLimiter(batchFetchRequestLimiter)
+              .searchRequestLimiter(searchRequestLimiter)
+              .projectBoundCacheAccess(new ProjectBoundCacheAccess(centralCache))
+              .build();
 
       apiConnectionPool.put(connection.getConnectionId(), cantoApi);
 
@@ -132,14 +143,15 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
     this.serviceConfiguration = ServiceConfiguration.fromServerEnvironment(serverEnvironment);
 
-    if (serviceConfiguration.useRequestLimiter) {
-      singleFetchRequestLimiter = new RequestLimiter(serviceConfiguration.maxRequestsPerMinute, serviceConfiguration.requestsWithoutDelay, serviceConfiguration.timeBufferInMs);
-
-      batchFetchRequestLimiter = new RequestLimiter(serviceConfiguration.maxRequestsPerMinute, serviceConfiguration.requestsWithoutDelay, serviceConfiguration.timeBufferInMs);
-    } else {
-      singleFetchRequestLimiter = null;
-      batchFetchRequestLimiter = null;
-    }
+    singleFetchRequestLimiter = serviceConfiguration.useSingleFetchRequestLimiter
+            ? new RequestLimiter(serviceConfiguration.singleFetchMaxRequestsPerMinute, serviceConfiguration.singleFetchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+            : null;
+    batchFetchRequestLimiter = serviceConfiguration.useBatchFetchRequestLimiter
+            ? new RequestLimiter(serviceConfiguration.batchFetchMaxRequestsPerMinute, serviceConfiguration.batchFetchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+            : null;
+    searchRequestLimiter = serviceConfiguration.useSearchRequestLimiter
+            ? new RequestLimiter(serviceConfiguration.searchMaxRequestsPerMinute, serviceConfiguration.searchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+            : null;
 
     if (serviceConfiguration.useCache) {
       CantoApi cantoApi = getCantoApi();
@@ -155,11 +167,18 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     CantoApi cantoApi = null;
     if (!serviceConfiguration.apiTenant.isBlank() && !serviceConfiguration.apiOAuthBaseUrl.isBlank() && !serviceConfiguration.apiAppId.isBlank() && !serviceConfiguration.apiAppSecret.isBlank() && !serviceConfiguration.apiUserId.isBlank()) {
 
-      cantoApi = new CantoApi(serviceConfiguration.apiTenant, serviceConfiguration.apiOAuthBaseUrl, serviceConfiguration.apiAppId, serviceConfiguration.apiAppSecret, serviceConfiguration.apiUserId, singleFetchRequestLimiter, batchFetchRequestLimiter,
-                              // cantoApi of Cache must not use the cache itself
-                              new ProjectBoundCacheAccess(null),
-                              // We need a very long Timeout, since batch fetches on Canto Side are very slow atm
-                              50);
+      cantoApi = new CantoApi.Builder()
+              .tenant(serviceConfiguration.apiTenant)
+              .oAuthBaseUrl(serviceConfiguration.apiOAuthBaseUrl)
+              .appId(serviceConfiguration.apiAppId)
+              .appSecret(serviceConfiguration.apiAppSecret)
+              .userId(serviceConfiguration.apiUserId)
+              .singleFetchRequestLimiter(singleFetchRequestLimiter)
+              .batchFetchRequestLimiter(batchFetchRequestLimiter)
+              .searchRequestLimiter(searchRequestLimiter)
+              .projectBoundCacheAccess(new ProjectBoundCacheAccess(null))
+              .timeoutInSeconds(50)
+              .build();
     }
     return cantoApi;
   }

@@ -13,8 +13,13 @@ import com.squareup.moshi.JsonAdapter;
 import com.squareup.moshi.Moshi;
 import de.espirit.common.base.Logging;
 import de.espirit.common.tools.Strings;
-import okhttp3.*;
-import okhttp3.HttpUrl.Builder;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -36,16 +41,18 @@ public class CantoApi {
 
   static private final Moshi moshi = new Moshi.Builder().build();
   static JsonAdapter<CantoAccessTokenData> cantoAccessTokenDataJsonAdapter = moshi.adapter(CantoAccessTokenData.class);
-  private final String tenant;
-  private final String oAuthBaseUrl;
-  private final @Nullable RequestLimiter singleFetchRequestLimiter;
-  private final @Nullable RequestLimiter batchFetchRequestLimiter;
-  private final ProjectBoundCacheAccess projectBoundCacheAccess;
-  private final long timeoutInSeconds;
+  private String tenant;
+  private String oAuthBaseUrl;
+  private @Nullable RequestLimiter singleFetchRequestLimiter;
+  private @Nullable RequestLimiter batchFetchRequestLimiter;
+  private @Nullable RequestLimiter searchRequestLimiter;
+  private ProjectBoundCacheAccess projectBoundCacheAccess;
+  private long timeoutInSeconds = 20;
+  private int rateLimitRetryCount = 3;
   private final Class<CantoApi> LOGGER = CantoApi.class;
-  private final String appId;
-  private final String appSecret;
-  private final String userId;
+  private String appId;
+  private String appSecret;
+  private String userId;
   private final JsonAdapter<CantoSearchResult> cantoSearchResultJsonAdapter = moshi.adapter(CantoSearchResult.class);
   private final JsonAdapter<CantoAsset> cantoAssetJsonAdapter = moshi.adapter(CantoAsset.class);
   private final JsonAdapter<CantoBatchResponse> cantoBatchResponseJsonAdapter = moshi.adapter(CantoBatchResponse.class);
@@ -70,6 +77,7 @@ public class CantoApi {
    * @param batchFetchRequestLimiter  batchFetchRequestLimiter to force Delay between single fetch request
    * @param projectBoundCacheAccess   access to central cache
    */
+   @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess) {
 
     this(tenant, oAuthBaseUrl, appId, appSecret, userId, singleFetchRequestLimiter, batchFetchRequestLimiter, projectBoundCacheAccess, 20);
@@ -90,6 +98,7 @@ public class CantoApi {
    * @param projectBoundCacheAccess   access to central cache
    * @param timeoutInSeconds          request timeout in seconds
    */
+  @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess, long timeoutInSeconds) {
     this.tenant = tenant;
     this.appId = appId;
@@ -102,6 +111,30 @@ public class CantoApi {
     // Do not accept 0 or less timeout, as it would lead to waiting indefinitely.
     this.timeoutInSeconds = timeoutInSeconds <= 0 ? 20 : timeoutInSeconds;
   }
+
+  /**
+   * Builder for {@link CantoApi}. Prefer this over the deprecated constructors.
+   * Required fields: {@code tenant}, {@code oAuthBaseUrl}, {@code appId}, {@code appSecret}, {@code userId}, {@code projectBoundCacheAccess}.
+   */
+  public static class Builder {
+    private final CantoApi api = new CantoApi();
+
+    public Builder tenant(String tenant) { api.tenant = tenant; return this; }
+    public Builder oAuthBaseUrl(String oAuthBaseUrl) { api.oAuthBaseUrl = oAuthBaseUrl; return this; }
+    public Builder appId(String appId) { api.appId = appId; return this; }
+    public Builder appSecret(String appSecret) { api.appSecret = appSecret; return this; }
+    public Builder userId(String userId) { api.userId = userId; return this; }
+    public Builder singleFetchRequestLimiter(@Nullable RequestLimiter singleFetchRequestLimiter) { api.singleFetchRequestLimiter = singleFetchRequestLimiter; return this; }
+    public Builder batchFetchRequestLimiter(@Nullable RequestLimiter batchFetchRequestLimiter) { api.batchFetchRequestLimiter = batchFetchRequestLimiter; return this; }
+    public Builder searchRequestLimiter(@Nullable RequestLimiter searchRequestLimiter) { api.searchRequestLimiter = searchRequestLimiter; return this; }
+    public Builder projectBoundCacheAccess(ProjectBoundCacheAccess projectBoundCacheAccess) { api.projectBoundCacheAccess = projectBoundCacheAccess; return this; }
+    public Builder timeoutInSeconds(long timeoutInSeconds) { api.timeoutInSeconds = timeoutInSeconds <= 0 ? 20 : timeoutInSeconds; return this; }
+    public Builder rateLimitRetryCount(int rateLimitRetryCount) { api.rateLimitRetryCount = rateLimitRetryCount; return this; }
+
+    public CantoApi build() { return api; }
+  }
+
+  private CantoApi() {}
 
   /**
    * <strong>!! Always use this method to access private _client member !!</strong>
@@ -321,7 +354,7 @@ public class CantoApi {
    */
   public CantoSearchResult fetchSearch(String keyword, @Nullable String scheme, @Nullable String albumId, int start, int limit, @Nullable String approvalStatus) {
 
-    Builder urlBuilder = getApiUrl();
+    HttpUrl.Builder urlBuilder = getApiUrl();
 
     if (albumId != null && !albumId.equals("--Folder--")) {
       urlBuilder.addPathSegments("album")
@@ -472,7 +505,7 @@ public class CantoApi {
       throw new IllegalStateException("OAuthBaseUrl invalid, not parsable. Please check your configuration. " + oAuthBaseUrl);
     }
 
-    final Builder urlBuilder = baseUrl.newBuilder();
+    final HttpUrl.Builder urlBuilder = baseUrl.newBuilder();
 
     final String url = urlBuilder.addPathSegments("oauth/api/oauth2/compatible/token")
         .addQueryParameter("app_id", appId)

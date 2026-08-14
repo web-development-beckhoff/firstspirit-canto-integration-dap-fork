@@ -7,7 +7,7 @@ public class CentralCachingTest {
 
   @Test void testCacheHitsAndMisses() {
 
-    CantoApi cantoApi = new CantoApi("TENANT", "OAUTHURL", "APP_ID", "APP_SECRET", "USER_ID", null, null, new ProjectBoundCacheAccess(null));
+    CantoApi cantoApi = new CantoApi.Builder().tenant("TENANT").oAuthBaseUrl("OAUTHURL").appId("APP_ID").appSecret("APP_SECRET").userId("USER_ID").projectBoundCacheAccess(new ProjectBoundCacheAccess(null)).build();
 
   }
 
