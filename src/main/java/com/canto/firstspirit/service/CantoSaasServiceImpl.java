@@ -7,6 +7,7 @@ import com.canto.firstspirit.api.model.CantoSearchResult;
 import com.canto.firstspirit.service.CantoSaasServiceConfigurable.ServiceConfiguration;
 import com.canto.firstspirit.service.cache.CentralCache;
 import com.canto.firstspirit.service.cache.ProjectBoundCacheAccess;
+import com.canto.firstspirit.service.cache.model.CachePersistenceEntry;
 import com.canto.firstspirit.service.factory.CantoAssetDTOFactory;
 import com.canto.firstspirit.service.factory.CantoConfigurationFactory;
 import com.canto.firstspirit.service.factory.CantoSearchResultDTOFactory;
@@ -18,14 +19,24 @@ import com.canto.firstspirit.service.server.model.CantoSearchParams;
 import com.canto.firstspirit.service.server.model.CantoSearchResultDTO;
 import com.canto.firstspirit.service.server.model.CantoServiceConnection;
 import com.espirit.moddev.components.annotations.ServiceComponent;
+import com.squareup.moshi.JsonAdapter;
+import com.squareup.moshi.Moshi;
+import com.squareup.moshi.Types;
 import de.espirit.common.base.Logging;
 import de.espirit.common.tools.Strings;
 import de.espirit.firstspirit.agency.BrokerAgent;
 import de.espirit.firstspirit.agency.SpecialistsBroker;
+import de.espirit.firstspirit.io.FileHandle;
 import de.espirit.firstspirit.module.ServerEnvironment;
 import de.espirit.firstspirit.module.Service;
 import de.espirit.firstspirit.module.ServiceProxy;
 import de.espirit.firstspirit.module.descriptor.ServiceDescriptor;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +48,11 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
   private ServerEnvironment serverEnvironment;
   public static final String SERVICE_NAME = "CantoSaasService";
+
+  private static final String CACHE_FILE_NAME = "canto-cache.json";
+  private static final Moshi MOSHI = new Moshi.Builder().build();
+  private static final Type CACHE_ENTRY_LIST_TYPE = Types.newParameterizedType(List.class, CachePersistenceEntry.class);
+  private static final JsonAdapter<List<CachePersistenceEntry>> CACHE_ADAPTER = MOSHI.adapter(CACHE_ENTRY_LIST_TYPE);
 
   private Map<Integer, CantoApi> apiConnectionPool;
 
@@ -155,6 +171,7 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     if (serviceConfiguration.useCache) {
       CantoApi cantoApi = getCantoApi();
       centralCache = new CentralCache(cantoApi, serviceConfiguration.cacheSize, serviceConfiguration.cacheUpdateTimespanMs, serviceConfiguration.cacheUpdateTimespanMs, serviceConfiguration.cacheItemInUseTimespanMs, serviceConfiguration.batchUpdateSize);
+      loadPersistedCache();
     } else {
       centralCache = null;
     }
@@ -187,6 +204,7 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     apiConnectionPool = null;
 
     if (centralCache != null) {
+      persistCache();
       centralCache.shutdown();
     }
     centralCache = null;
@@ -196,6 +214,50 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     searchRequestLimiter = null;
 
     Logging.logInfo("[stop] CantoSaasServerService stopped", this.getClass());
+  }
+
+  private void persistCache() {
+    if (centralCache == null) {
+      return;
+    }
+    try {
+      List<CachePersistenceEntry> entries = centralCache.getEntriesForPersistence();
+
+      FileHandle cacheFile = obtainDataFileHandle(CACHE_FILE_NAME);
+      try (OutputStream out = cacheFile.getOutputStream(false)) {
+        out.write(CACHE_ADAPTER.toJson(entries).getBytes(StandardCharsets.UTF_8));
+      }
+      Logging.logInfo("[persistCache] Persisted " + entries.size() + " cache entries to " + cacheFile.getPath(), getClass());
+    } catch (Exception e) {
+      Logging.logWarning("[persistCache] Failed to persist cache", e, getClass());
+    }
+  }
+
+  private void loadPersistedCache() {
+    if (centralCache == null) {
+      return;
+    }
+    try {
+      FileHandle cacheFile = obtainDataFileHandle(CACHE_FILE_NAME);
+      if (!cacheFile.exists() || !cacheFile.isFile()) {
+        Logging.logInfo("[loadPersistedCache] No persisted cache file found, starting with empty cache.", getClass());
+        return;
+      }
+      try (InputStream in = cacheFile.load()) {
+        String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        List<CachePersistenceEntry> entries = CACHE_ADAPTER.fromJson(json);
+        if (entries != null) {
+          centralCache.loadPersistedEntries(entries);
+        }
+      }
+    } catch (Exception e) {
+      Logging.logWarning("[loadPersistedCache] Failed to load persisted cache, starting with empty cache", e, getClass());
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private FileHandle obtainDataFileHandle(String name) throws IOException {
+    return ((de.espirit.firstspirit.io.FileSystem<FileHandle>) serverEnvironment.getDataDir()).obtain(name);
   }
 
   @Override public boolean isRunning() {
@@ -224,5 +286,12 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
   @Override public void updated(final String s) {
     // stub
+  }
+
+  @Override
+  public void logCacheStatus() {
+    if (centralCache != null) {
+      centralCache.logCacheStatus();
+    }
   }
 }

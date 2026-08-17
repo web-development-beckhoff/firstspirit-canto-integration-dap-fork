@@ -47,7 +47,7 @@ class CantoApiRetryTest {
     mockCall = mock(Call.class);
     when(mockClient.newCall(any())).thenReturn(mockCall);
 
-    setField("okHttpClient", mockClient);
+    setField("_client", mockClient);
     setField("validUntilTimestamp", Long.MAX_VALUE);
     setField("retryDelayMs", 0L);
   }

@@ -4,8 +4,10 @@ import com.canto.firstspirit.api.CantoApi;
 import com.canto.firstspirit.api.CantoAssetIdentifierFactory;
 import com.canto.firstspirit.api.model.CantoAsset;
 import com.canto.firstspirit.service.cache.model.CacheElement;
+import com.canto.firstspirit.service.cache.model.CachePersistenceEntry;
 import com.canto.firstspirit.service.server.model.CantoAssetIdentifier;
 import de.espirit.common.base.Logging;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import org.jetbrains.annotations.Nullable;
 
@@ -138,6 +140,44 @@ public class CentralCache {
   public void clear() {
     cacheUpdater.clearUpdateBatches();
     cacheMap.clear();
+  }
+
+  /**
+   * Collect all current cache entries for persistence.
+   *
+   * @return list of cache entries suitable for serialization
+   */
+  public List<CachePersistenceEntry> getEntriesForPersistence() {
+    return cacheMap.values()
+        .stream()
+        .map(el -> new CachePersistenceEntry(el.asset, el.lastUsedTimestamp, el.lastUpdatedTimestamp))
+        .toList();
+  }
+
+  /**
+   * Populate the cache from persisted entries. All entries are loaded.
+   * All loaded entries have their lastUsedTimestamp reset to now so the CacheUpdater keeps them.
+   *
+   * @param entries list of persisted cache entries
+   */
+  public void loadPersistedEntries(List<CachePersistenceEntry> entries) {
+    long now = System.currentTimeMillis();
+    int loaded = 0;
+    for (CachePersistenceEntry entry : entries) {
+      if (entry.asset == null) {
+        continue;
+      }
+      String cacheId = CantoAssetIdentifierFactory.fromCantoAsset(entry.asset).getPath();
+      CacheElement element = new CacheElement(entry.asset, cacheItemLifespanMs, cacheItemInUseTimespanMs);
+      if (entry.lastUsedTimestamp > 0) {
+        element.lastUsedTimestamp = now;
+      }
+      element.lastUpdatedTimestamp = entry.lastUpdatedTimestamp;
+      cacheMap.put(cacheId, element);
+      cacheUpdater.addToUpdateBatch(cacheId);
+      loaded++;
+    }
+    Logging.logInfo("[CentralCache] Loaded " + loaded + " of " + entries.size() + " persisted entries", this.getClass());
   }
 
   public void shutdown() {
