@@ -149,4 +149,28 @@ public class CentralCache {
   @Override public String toString() {
     return "CentralCache{" + "cacheItemLifespanMs=" + cacheItemLifespanMs + ", cacheUpdateTimespanMs=" + cacheUpdateTimespanMs + ", cacheItemInUseTimespanMs=" + cacheItemInUseTimespanMs + ", maxCacheSize=" + maxCacheSize + '}';
   }
+
+  /**
+   * Logs the current cache status: total size, load, elements still in use, invalid elements, and update batch count.
+   */
+  public void logCacheStatus() {
+    int total = cacheMap.size();
+    int inUse = 0;
+    int notInUse = 0;
+    int invalid = 0;
+
+    for (CacheElement element : cacheMap.values()) {
+      if (element.isStillInUse()) {
+        inUse++;
+      } else {
+        notInUse++;
+      }
+      if (!element.isValid()) {
+        invalid++;
+      }
+    }
+
+    int cacheLoad = (int) ((total / (double) maxCacheSize) * 100);
+    Logging.logInfo(String.format("[CacheUpdater] Cache Status: size=%d/%d (%d%%) | inUse=%d | notInUse=%d | invalid=%d", total, maxCacheSize, cacheLoad, inUse, notInUse, invalid), this.getClass());
+  }
 }
