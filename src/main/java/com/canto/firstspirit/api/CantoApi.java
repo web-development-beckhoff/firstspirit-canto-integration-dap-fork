@@ -57,6 +57,7 @@ public class CantoApi {
   private ProjectBoundCacheAccess projectBoundCacheAccess;
   private long timeoutInSeconds = 20;
   private int rateLimitRetryCount = 3;
+  private long retryDelayMs = TimeUnit.MINUTES.toMillis(1); // NOSONAR
   private final Class<CantoApi> LOGGER = CantoApi.class;
   private String appId;
   private String appSecret;
@@ -105,6 +106,7 @@ public class CantoApi {
    * @param batchFetchRequestLimiter  batchFetchRequestLimiter to force Delay between single fetch request
    * @param projectBoundCacheAccess   access to central cache
    * @param timeoutInSeconds          request timeout in seconds
+   * @deprecated Use {@link Builder} instead.
    */
   @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess, long timeoutInSeconds) {
@@ -194,8 +196,8 @@ public class CantoApi {
    */
   private HttpUrl.Builder getApiUrl() {
     return new HttpUrl.Builder().scheme("https")
-        .host(this.tenant)
-        .addPathSegments("api/v1");
+      .host(this.tenant)
+      .addPathSegments("api/v1");
   }
 
 
@@ -216,7 +218,7 @@ public class CantoApi {
     }
 
     HttpUrl url = getApiUrl().addPathSegments(assetId.getPath())
-        .build();
+      .build();
 
     Logging.logDebug("[getAssetById] fetching " + url, LOGGER);
 
@@ -436,10 +438,8 @@ public class CantoApi {
    */
   Response executeGetRequest(HttpUrl url) throws IOException {
 
-    Request request = new Request.Builder().url(url)
-        .build();
-    Response response = getClient().newCall(request)
-        .execute();
+    Request request = new Request.Builder().url(url).build();
+    Response response = executeWithRetryOn429(request);
 
     if (!response.isSuccessful()) {
       String bodyText = getAndCloseResponseBodyAsString(response);
@@ -460,6 +460,52 @@ public class CantoApi {
     RequestBody requestBody = RequestBody.create(jsonBody, MediaType.parse("application/json"));
     Request request = new Request.Builder().url(url)
       .post(requestBody)
+      .build();
+    Response response = executeWithRetryOn429(request);
+
+    if (!response.isSuccessful()) {
+      response.close();
+      throw new IOException("Unexpected code " + response.code());
+    }
+
+    return response;
+
+  }
+
+  /**
+   * Executes a request and retries once after 60 seconds if the response is 429 Too Many Requests.
+   *
+   * @param request request to execute
+   * @return response
+   * @throws IOException on network error
+   */
+  private Response executeWithRetryOn429(Request request) throws IOException {
+    Response response = getClient().newCall(request).execute();
+    for (int attempt = 1; attempt <= rateLimitRetryCount && response.code() == 429; attempt++) {
+      response.close();
+      Logging.logWarning(String.format("[CantoApi] Rate limit hit (429). Retrying after 60 seconds (attempt %d/%d).", attempt, rateLimitRetryCount), LOGGER);
+      try {
+        Thread.sleep(retryDelayMs);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      response = getClient().newCall(request).execute();
+    }
+    if (response.code() == 429) {
+      Logging.logError(String.format("[CantoApi] Rate limit hit (429). All %d retries exhausted.", rateLimitRetryCount), null, LOGGER);
+    }
+    return response;
+  }
+  /**
+   * @param url Request URL
+   * @return body source code
+   * @throws IOException on failed request
+   */
+  private Response executePutRequest(HttpUrl url, String jsonBody) throws IOException {
+
+    RequestBody requestBody = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+    Request request = new Request.Builder().url(url)
+      .put(requestBody)
       .build();
     Response response = getClient().newCall(request)
       .execute();
