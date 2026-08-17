@@ -12,7 +12,6 @@ import de.espirit.common.tools.Strings;
 import de.espirit.firstspirit.access.BaseContext;
 import de.espirit.firstspirit.access.Language;
 import de.espirit.firstspirit.access.editor.ValueIndexer;
-import de.espirit.firstspirit.agency.ProjectReferencesAgent;
 import de.espirit.firstspirit.agency.TransferAgent;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataAccessSession;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataSnippetProvider;
@@ -166,9 +165,17 @@ public class CantoDAPSession implements DataAccessSession<CantoDAPAsset>, Transf
     supplierHost.registerSupplier(rawValueType, Collections::singletonList);
   }
 
-  @Override public String getTemplate(@NotNull CantoDAPAsset cantoDAPAsset, @NotNull Language language) {
-    return "<div style=\"padding: 20px;\"><h2>${title}</h2>" + "<div><img src=\"${image}\" /></div>" + "</div>";
-  }
+    @Override public String getTemplate(@NotNull CantoDAPAsset cantoDAPAsset, @NotNull Language language) {
+      return """
+        <div style="padding: 20px;">
+          <h2>${title}</h2>
+          <div>
+            <img src="${image}" />
+          </div>
+          <a style="display: inline-block; padding: 6px 15px; border-radius: 50px; margin-top: 10px; background: #fa9100; color: white; font-weight: 600;" target="_blank" href="${cantoUrl}">goto Canto</a>
+        </div>
+        """;
+    }
 
   @Override public void registerParameters(ParameterSet parameterSet, CantoDAPAsset cantoDAPAsset, @NotNull Language language) {
     parameterSet.addText("title", cantoDAPAsset.getTitle());

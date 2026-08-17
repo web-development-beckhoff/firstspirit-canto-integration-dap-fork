@@ -22,7 +22,6 @@ public class CantoConfigurationFactory {
    */
   @NotNull public static CantoConfiguration fromProjectBroker(SpecialistsBroker broker, String apiTenant, String apiOAuthBaseUrl, String apiAppId, String apiAppSecret) {
     Values config = CantoProjectApp.getConfig(broker);
-
     String userId = config.getString(CantoProjectAppConfiguration.PARAM_USER_ID);
 
     ProjectAgent projectAgent = broker.requireSpecialist(ProjectAgent.TYPE);

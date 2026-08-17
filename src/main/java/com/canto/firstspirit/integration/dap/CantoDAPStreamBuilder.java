@@ -2,14 +2,13 @@ package com.canto.firstspirit.integration.dap;
 
 import com.canto.firstspirit.integration.dap.model.CantoDAPAsset;
 import com.canto.firstspirit.service.CantoSaasServiceProjectBoundClient;
-import com.canto.firstspirit.service.factory.CantoConfigurationFactory;
 import com.canto.firstspirit.service.server.model.CantoAssetDTO;
-import com.canto.firstspirit.service.server.model.CantoConfiguration;
 import com.canto.firstspirit.service.server.model.CantoSearchParams;
 import com.canto.firstspirit.service.server.model.CantoSearchResultDTO;
 import com.canto.firstspirit.util.CantoScheme;
 import com.canto.firstspirit.util.FolderStructure;
 import de.espirit.common.base.Logging;
+import de.espirit.common.tools.Strings;
 import de.espirit.firstspirit.agency.SpecialistsBroker;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataStream;
 import de.espirit.firstspirit.client.plugin.dataaccess.DataStreamBuilder;
@@ -34,24 +33,25 @@ import org.jetbrains.annotations.NotNull;
 
 public class CantoDAPStreamBuilder implements DataStreamBuilder<CantoDAPAsset>, Filterable {
 
+  public static final String STATE_APPROVED = "Approved";
+  public static final String STATE_RESTRICTED = "Restricted";
+
   private final StreamBuilderAspectMap aspects = new StreamBuilderAspectMap();
   private final CantoSaasServiceProjectBoundClient cantoSaasServiceClient;
   private final CantoDAPFilter filter;
   private final ParameterText paramKeyword;
   private final ParameterSelect paramScheme;
-  private ParameterSelect paramApprovalStatus;
-  private ParameterSelect paramFolderStructure;
+  private final ParameterSelect paramApprovalStatus;
+  private final ParameterSelect paramFolderStructure;
 
   private ParameterMap parameterMap;
 
   public CantoDAPStreamBuilder(CantoSaasServiceProjectBoundClient cantoSaasServiceClient, CantoDAPFilter filter, SpecialistsBroker broker) {
-
     this.filter = filter;
     this.cantoSaasServiceClient = cantoSaasServiceClient;
-    this.paramApprovalStatus = null;
 
     aspects.put(Filterable.TYPE, this);
-    paramKeyword = Parameter.Factory.createText("keyword", "Keyword", "");
+    paramKeyword = Factory.createText("keyword", "Keyword", "");
 
     // Only show Scheme Selection in UI if no fixed Scheme is set
     List<SelectItem> schemeSelectList = Arrays.stream(CantoScheme.values())
@@ -60,21 +60,20 @@ public class CantoDAPStreamBuilder implements DataStreamBuilder<CantoDAPAsset>, 
         .map(cantoScheme -> Factory.createSelectItem(cantoScheme.getDisplayName(), cantoScheme.toString()))
         .collect(Collectors.toList());
     if (filter.getValidScheme() == null) {
-      schemeSelectList.add(0, Parameter.Factory.createSelectItem("-", ""));
-      paramScheme = Parameter.Factory.createSelect("scheme", schemeSelectList, "");
+      schemeSelectList.add(0, Factory.createSelectItem("-", ""));
+      paramScheme = Factory.createSelect("scheme", schemeSelectList, "");
     } else {
-      paramScheme = Parameter.Factory.createSelect("scheme",
+      paramScheme = Factory.createSelect("scheme",
                                                    schemeSelectList,
                                                    filter.getValidScheme()
                                                        .toString());
     }
 
-    List<SelectItem> approvalStatus = List.of(Factory.createSelectItem("-", ""), Factory.createSelectItem("Approved", "Approved"), Factory.createSelectItem("Pending", "Pending"));
-    paramApprovalStatus = Parameter.Factory.createSelect("approvalStatus", approvalStatus, "");
+    List<SelectItem> approvalStatus = List.of(Factory.createSelectItem("Status", ""), Factory.createSelectItem(STATE_APPROVED, STATE_APPROVED), Factory.createSelectItem(STATE_RESTRICTED, STATE_RESTRICTED));
+    paramApprovalStatus = Factory.createSelect("approvalStatus", approvalStatus, "");
 
     List<SelectItem> folderStructure = new FolderStructure(cantoSaasServiceClient).getFolderStructure();
     paramFolderStructure = Factory.createSelect("folderStructure", folderStructure, "--Folder--");
-
   }
 
   @Override public <A> A getAspect(@NotNull StreamBuilderAspectType<A> streamBuilderAspectType) {
@@ -105,15 +104,30 @@ public class CantoDAPStreamBuilder implements DataStreamBuilder<CantoDAPAsset>, 
     private boolean hasNext = true;
 
     public CantoDAPDataStream() {
-      searchParams = new CantoSearchParams(0,
-                                           0,
-                                           parameterMap.get(paramKeyword),
-                                           filter.getValidScheme() != null ? filter.getValidScheme()
-                                               .toString() : parameterMap.get(paramScheme),
-                                           paramApprovalStatus != null ? parameterMap.get(paramApprovalStatus) : null,
-                                           null);
+      searchParams = getSearchParams(0, 0);
 
       fetchedAssets = null;
+    }
+
+    private @NotNull CantoSearchParams getSearchParams(int start, int limit) {
+      String approvalState = parameterMap.get(paramApprovalStatus);
+      Logging.logDebug(String.format("use state [paramApprovalStatus: %s, selectedState: %s]", paramApprovalStatus, approvalState), getClass());
+      String scheme = filter.getValidScheme() != null ? filter.getValidScheme().toString() : parameterMap.get(paramScheme);
+      String approvalStatus = null;
+      if (paramApprovalStatus != null) {
+        if (Strings.notEmpty(approvalState)) {
+          approvalStatus = approvalState;
+        } else {
+          approvalStatus = STATE_APPROVED + "|" +  STATE_RESTRICTED;
+        }
+      }
+
+      return new CantoSearchParams(start,
+        limit,
+        parameterMap.get(paramKeyword),
+        scheme,
+        approvalStatus,
+        parameterMap.get(paramFolderStructure));
     }
 
     /**
@@ -126,13 +140,7 @@ public class CantoDAPStreamBuilder implements DataStreamBuilder<CantoDAPAsset>, 
         fetchedAssets = new LinkedList<>();
       }
 
-      searchParams = new CantoSearchParams(searchParams.getStart() + searchParams.getLimit(),
-                                           pageSize,
-                                           parameterMap.get(paramKeyword),
-                                           filter.getValidScheme() != null ? filter.getValidScheme()
-                                               .toString() : parameterMap.get(paramScheme),
-                                           parameterMap.get(paramApprovalStatus),
-                                           parameterMap.get(paramFolderStructure));
+      searchParams = getSearchParams(searchParams.getStart() + searchParams.getLimit(), pageSize);
 
       if (searchParams.getStart() <= total) {
         Logging.logInfo("[fetchNextPage] Fetching next page, " + searchParams + ", total=" + total, this.getClass());
@@ -150,8 +158,7 @@ public class CantoDAPStreamBuilder implements DataStreamBuilder<CantoDAPAsset>, 
     }
 
     @NotNull @Override public List<CantoDAPAsset> getNext(int count) {
-
-      Logging.logInfo("[getNext], count=" + count + ", availableAssets=" + availableAssets + ", hasNext=" + hasNext + ", total=" + total, this.getClass());
+      Logging.logDebug("[getNext], count=" + count + ", availableAssets=" + availableAssets + ", hasNext=" + hasNext + ", total=" + total, this.getClass());
       if (availableAssets < count && hasNext) {
         fetchNextPage();
       }

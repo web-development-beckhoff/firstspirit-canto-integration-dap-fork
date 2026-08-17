@@ -16,20 +16,18 @@ public class CantoAssetDTOFactory {
     }
     try {
       return new CantoAssetDTO(asset.getId(),
-                               asset.getName(),
-                               UrlHelper.removeLastUrlPathPart(asset.getCantoUrls()
-                                                                   .getDirectUrlPreview()),
-                               asset.getCantoUrls()
-                                   .getDirectUrlOriginal(),
-                               asset.getScheme(),
-                               asset.getDescription(),
-                               asset.getWidth(),
-                               asset.getHeight(),
-                               asset.getSize(),
-                               asset.getCopyright(),
-                               asset.getFileExtension(),
-                               asset.getAdditional(),
-                               asset.getApprovalStatus());
+                    asset.getName(),
+                    UrlHelper.removeLastUrlPathPart(asset.getCantoUrls().getDirectUrlPreview()),
+                    asset.getCantoUrls().getDirectUrlOriginal(),
+                    asset.getScheme(),
+                    asset.getDescription(),
+                    asset.getWidth(),
+                    asset.getHeight(),
+                    asset.getSize(),
+                    asset.getCopyright(),
+                    asset.getFileExtension(),
+                    asset.getAdditional(),
+                    asset.getApprovalStatus());
 
     } catch (Exception e) {
       throw new RuntimeException("Unable to create DTO Object for " + asset, e);

@@ -71,7 +71,6 @@ public class CantoSaasServiceConfigurable extends GenericConfigPanel<ServerEnvir
           } catch (Exception e) {
             Logging.logError("Unable to restart CantoService after Config Change", e, this.getClass());
           }
-
         }
       }
     };

@@ -85,6 +85,7 @@ public class CantoApi {
    * @param singleFetchRequestLimiter singleFetchRequestLimiter to force Delay between single fetch request
    * @param batchFetchRequestLimiter  batchFetchRequestLimiter to force Delay between single fetch request
    * @param projectBoundCacheAccess   access to central cache
+   * @deprecated Use {@link Builder} instead.
    */
    @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess) {

@@ -2,9 +2,10 @@ package com.canto.firstspirit.integration.dap;
 
 import com.canto.firstspirit.service.CantoSaasServiceProjectBoundClient;
 import de.espirit.common.base.Logging;
-import de.espirit.firstspirit.access.BaseContext;
 import de.espirit.firstspirit.agency.ProjectAgent;
 import java.util.HashMap;
+
+import de.espirit.firstspirit.agency.SpecialistsBroker;
 import org.jetbrains.annotations.Nullable;
 
 class CantoDAPProjectBoundClientCache {
@@ -18,7 +19,7 @@ class CantoDAPProjectBoundClientCache {
    * @param context Project Specific Context
    * @return CantoSaasServiceProjectBoundClient
    */
-  @Nullable CantoSaasServiceProjectBoundClient getProjectBoundClient(BaseContext context) {
+  @Nullable CantoSaasServiceProjectBoundClient getProjectBoundClient(SpecialistsBroker context) {
 
     long projectId = context.requireSpecialist(ProjectAgent.TYPE)
         .getId();
@@ -33,7 +34,7 @@ class CantoDAPProjectBoundClientCache {
     return createProjectBoundClientAndAddToCache(context);
   }
 
-  private CantoSaasServiceProjectBoundClient createProjectBoundClientAndAddToCache(BaseContext context) {
+  private CantoSaasServiceProjectBoundClient createProjectBoundClientAndAddToCache(SpecialistsBroker context) {
     CantoSaasServiceProjectBoundClient cantoSaasServiceProjectBoundClient = new CantoSaasServiceProjectBoundClient(context);
     long projectId = context.requireSpecialist(ProjectAgent.TYPE)
         .getId();
