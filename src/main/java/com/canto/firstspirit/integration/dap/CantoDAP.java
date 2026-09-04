@@ -66,7 +66,7 @@ public class CantoDAP implements DataAccessPlugin<CantoDAPAsset>, Reporting, Rep
   }
 
   @Override public void tearDown() {
-
+    // do nothing
   }
 
   @Override public Image<?> getReportIcon(final boolean active) {

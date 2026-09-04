@@ -13,13 +13,24 @@ import com.squareup.moshi.JsonAdapter;
 import com.squareup.moshi.Moshi;
 import de.espirit.common.base.Logging;
 import de.espirit.common.tools.Strings;
-import okhttp3.*;
-import okhttp3.HttpUrl.Builder;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -34,18 +45,23 @@ import java.util.stream.Collectors;
  */
 public class CantoApi {
 
+  static final String SCHEME = "scheme";
   static private final Moshi moshi = new Moshi.Builder().build();
   static JsonAdapter<CantoAccessTokenData> cantoAccessTokenDataJsonAdapter = moshi.adapter(CantoAccessTokenData.class);
-  private final String tenant;
-  private final String oAuthBaseUrl;
-  private final @Nullable RequestLimiter singleFetchRequestLimiter;
-  private final @Nullable RequestLimiter batchFetchRequestLimiter;
-  private final ProjectBoundCacheAccess projectBoundCacheAccess;
-  private final long timeoutInSeconds;
+
+  private String tenant;
+  private String oAuthBaseUrl;
+  private @Nullable RequestLimiter singleFetchRequestLimiter;
+  private @Nullable RequestLimiter batchFetchRequestLimiter;
+  private @Nullable RequestLimiter searchRequestLimiter;
+  private ProjectBoundCacheAccess projectBoundCacheAccess;
+  private long timeoutInSeconds = 20;
+  private int rateLimitRetryCount = 3;
+  private long retryDelayMs = TimeUnit.MINUTES.toMillis(1); // NOSONAR
   private final Class<CantoApi> LOGGER = CantoApi.class;
-  private final String appId;
-  private final String appSecret;
-  private final String userId;
+  private String appId;
+  private String appSecret;
+  private String userId;
   private final JsonAdapter<CantoSearchResult> cantoSearchResultJsonAdapter = moshi.adapter(CantoSearchResult.class);
   private final JsonAdapter<CantoAsset> cantoAssetJsonAdapter = moshi.adapter(CantoAsset.class);
   private final JsonAdapter<CantoBatchResponse> cantoBatchResponseJsonAdapter = moshi.adapter(CantoBatchResponse.class);
@@ -69,7 +85,9 @@ public class CantoApi {
    * @param singleFetchRequestLimiter singleFetchRequestLimiter to force Delay between single fetch request
    * @param batchFetchRequestLimiter  batchFetchRequestLimiter to force Delay between single fetch request
    * @param projectBoundCacheAccess   access to central cache
+   * @deprecated Use {@link Builder} instead.
    */
+   @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess) {
 
     this(tenant, oAuthBaseUrl, appId, appSecret, userId, singleFetchRequestLimiter, batchFetchRequestLimiter, projectBoundCacheAccess, 20);
@@ -89,7 +107,9 @@ public class CantoApi {
    * @param batchFetchRequestLimiter  batchFetchRequestLimiter to force Delay between single fetch request
    * @param projectBoundCacheAccess   access to central cache
    * @param timeoutInSeconds          request timeout in seconds
+   * @deprecated Use {@link Builder} instead.
    */
+  @Deprecated(forRemoval = true, since = "1.4.4")
   public CantoApi(String tenant, String oAuthBaseUrl, String appId, String appSecret, String userId, @Nullable RequestLimiter singleFetchRequestLimiter, @Nullable RequestLimiter batchFetchRequestLimiter, ProjectBoundCacheAccess projectBoundCacheAccess, long timeoutInSeconds) {
     this.tenant = tenant;
     this.appId = appId;
@@ -102,6 +122,30 @@ public class CantoApi {
     // Do not accept 0 or less timeout, as it would lead to waiting indefinitely.
     this.timeoutInSeconds = timeoutInSeconds <= 0 ? 20 : timeoutInSeconds;
   }
+
+  /**
+   * Builder for {@link CantoApi}. Prefer this over the deprecated constructors.
+   * Required fields: {@code tenant}, {@code oAuthBaseUrl}, {@code appId}, {@code appSecret}, {@code userId}, {@code projectBoundCacheAccess}.
+   */
+  public static class Builder {
+    private final CantoApi api = new CantoApi();
+
+    public Builder tenant(String tenant) { api.tenant = tenant; return this; }
+    public Builder oAuthBaseUrl(String oAuthBaseUrl) { api.oAuthBaseUrl = oAuthBaseUrl; return this; }
+    public Builder appId(String appId) { api.appId = appId; return this; }
+    public Builder appSecret(String appSecret) { api.appSecret = appSecret; return this; }
+    public Builder userId(String userId) { api.userId = userId; return this; }
+    public Builder singleFetchRequestLimiter(@Nullable RequestLimiter singleFetchRequestLimiter) { api.singleFetchRequestLimiter = singleFetchRequestLimiter; return this; }
+    public Builder batchFetchRequestLimiter(@Nullable RequestLimiter batchFetchRequestLimiter) { api.batchFetchRequestLimiter = batchFetchRequestLimiter; return this; }
+    public Builder searchRequestLimiter(@Nullable RequestLimiter searchRequestLimiter) { api.searchRequestLimiter = searchRequestLimiter; return this; }
+    public Builder projectBoundCacheAccess(ProjectBoundCacheAccess projectBoundCacheAccess) { api.projectBoundCacheAccess = projectBoundCacheAccess; return this; }
+    public Builder timeoutInSeconds(long timeoutInSeconds) { api.timeoutInSeconds = timeoutInSeconds <= 0 ? 20 : timeoutInSeconds; return this; }
+    public Builder rateLimitRetryCount(int rateLimitRetryCount) { api.rateLimitRetryCount = rateLimitRetryCount; return this; }
+
+    public CantoApi build() { return api; }
+  }
+
+  private CantoApi() {}
 
   /**
    * <strong>!! Always use this method to access private _client member !!</strong>
@@ -153,8 +197,8 @@ public class CantoApi {
    */
   private HttpUrl.Builder getApiUrl() {
     return new HttpUrl.Builder().scheme("https")
-        .host(this.tenant)
-        .addPathSegments("api/v1");
+      .host(this.tenant)
+      .addPathSegments("api/v1");
   }
 
 
@@ -175,9 +219,9 @@ public class CantoApi {
     }
 
     HttpUrl url = getApiUrl().addPathSegments(assetId.getPath())
-        .build();
+      .build();
 
-    Logging.logInfo("[getAssetById] fetching " + url, LOGGER);
+    Logging.logDebug("[getAssetById] fetching " + url, LOGGER);
 
     CantoAsset asset = null;
     if (singleFetchRequestLimiter != null) {
@@ -206,9 +250,9 @@ public class CantoApi {
    * @return List of CantoAssets in the same order as identifiers. Missing Assets are replaced by null
    */
   public @NotNull List<@Nullable CantoAsset> fetchAssets(@NotNull List<? extends CantoAssetIdentifier> assetIdentifiers) {
-    Logging.logInfo("[fetchAssets] fetching ids: " + Strings.implode(assetIdentifiers, ","), LOGGER);
+    Logging.logDebug("[fetchAssets] fetching ids: " + Strings.implode(assetIdentifiers, ","), LOGGER);
     if (assetIdentifiers.isEmpty()) {
-      Logging.logInfo("[fetchAssets] Identifier List empty, returning empty list", LOGGER);
+      Logging.logDebug("[fetchAssets] Identifier List empty, returning empty list", LOGGER);
       return Collections.emptyList();
     }
     if (assetIdentifiers.size() == 1) {
@@ -236,14 +280,14 @@ public class CantoApi {
     }
 
     List<Map<String, String>> requestList = identifiersToFetch.stream()
-        .map(cantoAssetIdentifier -> Map.of("id", cantoAssetIdentifier.getId(), "scheme", cantoAssetIdentifier.getSchema()))
-        .collect(Collectors.toList());
+      .map(cantoAssetIdentifier -> Map.of("id", cantoAssetIdentifier.getId(), SCHEME, cantoAssetIdentifier.getSchema()))
+      .toList();
 
     String stringifiedJsonBody = moshi.adapter(List.class)
-        .toJson(requestList);
+      .toJson(requestList);
 
     HttpUrl url = getApiUrl().addPathSegments("batch/content")
-        .build();
+      .build();
 
     if (batchFetchRequestLimiter != null) {
       batchFetchRequestLimiter.delayRequestIfNecessary();
@@ -264,12 +308,12 @@ public class CantoApi {
 
       List<CantoAsset> docResult = cantoBatchResponse.getDocResult();
       Map<String, CantoAsset> newlyFetchedAssets = docResult.stream()
-              .filter(Objects::nonNull)
-              .collect(Collectors.toMap(asset -> CantoAssetIdentifierFactory.fromCantoAsset(asset)
-              .getPath(), Function.identity()));
+        .filter(Objects::nonNull)
+        .collect(Collectors.toMap(asset -> CantoAssetIdentifierFactory.fromCantoAsset(asset)
+          .getPath(), Function.identity()));
 
       // Add newly fetched assets to cache
-      projectBoundCacheAccess.addAllToCache(docResult.stream().filter(Objects::nonNull).collect(Collectors.toList()));
+      projectBoundCacheAccess.addAllToCache(docResult.stream().filter(Objects::nonNull).toList());
 
       Logging.logDebug("[fetchAssets] " + cantoBatchResponse, LOGGER);
 
@@ -288,13 +332,12 @@ public class CantoApi {
       }
 
       return resultList;
-
     } catch (Exception e) {
       Logging.logError("Error during bulk fetch of Ids" + Strings.implode(assetIdentifiers, ","), e, this.getClass());
       // Return list of nulls
       return assetIdentifiers.stream()
-          .map(id -> (CantoAsset) null)
-          .collect(Collectors.toList());
+        .map(id -> (CantoAsset) null) // NOSONAR
+        .toList();
 
     }
 
@@ -321,28 +364,28 @@ public class CantoApi {
    */
   public CantoSearchResult fetchSearch(String keyword, @Nullable String scheme, @Nullable String albumId, int start, int limit, @Nullable String approvalStatus) {
 
-    Builder urlBuilder = getApiUrl();
+    HttpUrl.Builder urlBuilder = getApiUrl();
 
     if (albumId != null && !albumId.equals("--Folder--")) {
       urlBuilder.addPathSegments("album")
-          .addPathSegments(albumId);
+        .addPathSegments(albumId);
     } else {
       urlBuilder.addPathSegments("search");
     }
 
     urlBuilder.addQueryParameter("keyword", keyword)
-        .addQueryParameter("start", String.valueOf(start))
-        .addQueryParameter("limit", String.valueOf(limit));
+      .addQueryParameter("start", String.valueOf(start))
+      .addQueryParameter("limit", String.valueOf(limit));
 
     // Validate CantoScheme
     CantoScheme cantoScheme = CantoScheme.fromString(scheme);
     if (cantoScheme != null) {
-      urlBuilder.addQueryParameter("scheme", cantoScheme.toString());
+      urlBuilder.addQueryParameter(SCHEME, cantoScheme.toString());
     } else {
       final String allSchemes = Arrays.stream(CantoScheme.values())
-          .map(CantoScheme::toString)
-          .collect(Collectors.joining("|"));
-      urlBuilder.addQueryParameter("scheme", allSchemes);
+        .map(CantoScheme::toString)
+        .collect(Collectors.joining("|"));
+      urlBuilder.addQueryParameter(SCHEME, allSchemes);
     }
     if (approvalStatus != null) {
       urlBuilder.addQueryParameter("approval", approvalStatus.toLowerCase());
@@ -350,7 +393,11 @@ public class CantoApi {
 
     final HttpUrl url = urlBuilder.build();
 
-    Logging.logInfo("[fetchSearch] " + url, getClass());
+    Logging.logDebug("[fetchSearch] " + url, getClass());
+
+    if (searchRequestLimiter != null) {
+      searchRequestLimiter.delayRequestIfNecessary();
+    }
 
     try (Response response = executeGetRequest(url)) {
       ResponseBody body = response.body();
@@ -392,10 +439,8 @@ public class CantoApi {
    */
   Response executeGetRequest(HttpUrl url) throws IOException {
 
-    Request request = new Request.Builder().url(url)
-        .build();
-    Response response = getClient().newCall(request)
-        .execute();
+    Request request = new Request.Builder().url(url).build();
+    Response response = executeWithRetryOn429(request);
 
     if (!response.isSuccessful()) {
       String bodyText = getAndCloseResponseBodyAsString(response);
@@ -415,10 +460,56 @@ public class CantoApi {
 
     RequestBody requestBody = RequestBody.create(jsonBody, MediaType.parse("application/json"));
     Request request = new Request.Builder().url(url)
-        .post(requestBody)
-        .build();
+      .post(requestBody)
+      .build();
+    Response response = executeWithRetryOn429(request);
+
+    if (!response.isSuccessful()) {
+      response.close();
+      throw new IOException("Unexpected code " + response.code());
+    }
+
+    return response;
+
+  }
+
+  /**
+   * Executes a request and retries once after 60 seconds if the response is 429 Too Many Requests.
+   *
+   * @param request request to execute
+   * @return response
+   * @throws IOException on network error
+   */
+  private Response executeWithRetryOn429(Request request) throws IOException {
+    Response response = getClient().newCall(request).execute();
+    for (int attempt = 1; attempt <= rateLimitRetryCount && response.code() == 429; attempt++) {
+      response.close();
+      Logging.logWarning(String.format("[CantoApi] Rate limit hit (429). Retrying after 60 seconds (attempt %d/%d).", attempt, rateLimitRetryCount), LOGGER);
+      try {
+        Thread.sleep(retryDelayMs);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      response = getClient().newCall(request).execute();
+    }
+    if (response.code() == 429) {
+      Logging.logError(String.format("[CantoApi] Rate limit hit (429). All %d retries exhausted.", rateLimitRetryCount), null, LOGGER);
+    }
+    return response;
+  }
+  /**
+   * @param url Request URL
+   * @return body source code
+   * @throws IOException on failed request
+   */
+  private Response executePutRequest(HttpUrl url, String jsonBody) throws IOException {
+
+    RequestBody requestBody = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+    Request request = new Request.Builder().url(url)
+      .put(requestBody)
+      .build();
     Response response = getClient().newCall(request)
-        .execute();
+      .execute();
 
     if (!response.isSuccessful()) {
       response.close();
@@ -442,7 +533,7 @@ public class CantoApi {
     if (body != null) {
       try {
         bodyText = body.source()
-            .readUtf8();
+          .readUtf8();
       } catch (Exception e) {
         Logging.logError("Unable to read Response Body", this.getClass());
       } finally {
@@ -472,29 +563,29 @@ public class CantoApi {
       throw new IllegalStateException("OAuthBaseUrl invalid, not parsable. Please check your configuration. " + oAuthBaseUrl);
     }
 
-    final Builder urlBuilder = baseUrl.newBuilder();
+    final HttpUrl.Builder urlBuilder = baseUrl.newBuilder();
 
     final String url = urlBuilder.addPathSegments("oauth/api/oauth2/compatible/token")
-        .addQueryParameter("app_id", appId)
-        .addQueryParameter("app_secret", appSecret)
-        .addQueryParameter("grant_type", "client_credentials")
-        .addQueryParameter("user_id", userId)
-        .toString();
+      .addQueryParameter("app_id", appId)
+      .addQueryParameter("app_secret", appSecret)
+      .addQueryParameter("grant_type", "client_credentials")
+      .addQueryParameter("user_id", userId)
+      .toString();
 
     OkHttpClient client = new OkHttpClient.Builder().build();
 
     RequestBody requestBody = RequestBody.create("", null);
 
     Request request = new Request.Builder().url(url)
-        .post(requestBody)
-        .build();
+      .post(requestBody)
+      .build();
 
     try (Response response = client.newCall(request)
-        .execute()) {
+      .execute()) {
       if (response.isSuccessful() && response.body() != null) {
 
         CantoAccessTokenData cantoAccessTokenData = cantoAccessTokenDataJsonAdapter.fromJson(response.body()
-                                                                                                 .source());
+          .source());
         if (CantoAccessTokenData.isValid(cantoAccessTokenData)) {
           Logging.logInfo("[generateAccessToken] Successfully generated new AccessToken: " + cantoAccessTokenData, CantoApi.class);
           return cantoAccessTokenData;
@@ -521,7 +612,7 @@ public class CantoApi {
   public @Nullable String fetchFolderStructure() {
     // Build the URL to fetch the folder structure
     HttpUrl url = getApiUrl().addPathSegments("tree?layer=-1")
-        .build();
+      .build();
 
     // Log the URL being fetched
     Logging.logInfo("[fetchFolderStructure] fetching " + url, LOGGER);

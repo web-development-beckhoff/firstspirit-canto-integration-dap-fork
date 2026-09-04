@@ -40,8 +40,8 @@ public class ProjectBoundCacheAccess {
       if (cachedAsset != null) {
         String allowedLastModified = allowedCacheIds.get(assetIdentifier.getPath());
         if (allowedLastModified == null || cachedAsset.getLastModified().equals(allowedLastModified)) {
-        Logging.logDebug("[ProjectBoundCacheAccess] Cache hit: [" + assetIdentifier + "]", this.getClass());
-        return cachedAsset;
+          Logging.logDebug("[ProjectBoundCacheAccess] Cache hit: [" + assetIdentifier + "]", this.getClass());
+          return cachedAsset;
         }
       }
     }
@@ -102,5 +102,4 @@ public class ProjectBoundCacheAccess {
       }
     }
   }
-
 }

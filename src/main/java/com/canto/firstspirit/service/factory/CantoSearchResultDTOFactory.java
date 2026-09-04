@@ -7,7 +7,6 @@ import com.canto.firstspirit.service.server.model.CantoSearchResultDTO;
 import de.espirit.common.base.Logging;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import org.jetbrains.annotations.NotNull;
 
 public class CantoSearchResultDTOFactory {
@@ -18,12 +17,11 @@ public class CantoSearchResultDTOFactory {
 
     if (cantoSearchResult.getFound() != null && cantoSearchResult.getResults() != null) {
       Logging.logDebug(cantoSearchResult.toString(), CantoSearchResultDTO.class);
-      total = cantoSearchResult.getFound()
-          .intValue();
+      total = cantoSearchResult.getFound().intValue();
       results = cantoSearchResult.getResults()
-          .stream()
-          .map(CantoAssetDTOFactory::fromAsset)
-          .collect(Collectors.toList());
+        .stream()
+        .map(CantoAssetDTOFactory::fromAsset)
+        .toList();
     }
 
     return new CantoSearchResultDTO(total, results, cantoSearchParams);

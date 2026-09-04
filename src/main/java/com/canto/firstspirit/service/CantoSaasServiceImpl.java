@@ -7,6 +7,7 @@ import com.canto.firstspirit.api.model.CantoSearchResult;
 import com.canto.firstspirit.service.CantoSaasServiceConfigurable.ServiceConfiguration;
 import com.canto.firstspirit.service.cache.CentralCache;
 import com.canto.firstspirit.service.cache.ProjectBoundCacheAccess;
+import com.canto.firstspirit.service.cache.model.CachePersistenceEntry;
 import com.canto.firstspirit.service.factory.CantoAssetDTOFactory;
 import com.canto.firstspirit.service.factory.CantoConfigurationFactory;
 import com.canto.firstspirit.service.factory.CantoSearchResultDTOFactory;
@@ -18,18 +19,27 @@ import com.canto.firstspirit.service.server.model.CantoSearchParams;
 import com.canto.firstspirit.service.server.model.CantoSearchResultDTO;
 import com.canto.firstspirit.service.server.model.CantoServiceConnection;
 import com.espirit.moddev.components.annotations.ServiceComponent;
+import com.squareup.moshi.JsonAdapter;
+import com.squareup.moshi.Moshi;
+import com.squareup.moshi.Types;
 import de.espirit.common.base.Logging;
 import de.espirit.common.tools.Strings;
 import de.espirit.firstspirit.agency.BrokerAgent;
 import de.espirit.firstspirit.agency.SpecialistsBroker;
+import de.espirit.firstspirit.io.FileHandle;
 import de.espirit.firstspirit.module.ServerEnvironment;
 import de.espirit.firstspirit.module.Service;
 import de.espirit.firstspirit.module.ServiceProxy;
 import de.espirit.firstspirit.module.descriptor.ServiceDescriptor;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -39,12 +49,18 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
   private ServerEnvironment serverEnvironment;
   public static final String SERVICE_NAME = "CantoSaasService";
 
+  private static final String CACHE_FILE_NAME = "canto-cache.json";
+  private static final Moshi MOSHI = new Moshi.Builder().build();
+  private static final Type CACHE_ENTRY_LIST_TYPE = Types.newParameterizedType(List.class, CachePersistenceEntry.class);
+  private static final JsonAdapter<List<CachePersistenceEntry>> CACHE_ADAPTER = MOSHI.adapter(CACHE_ENTRY_LIST_TYPE);
+
   private Map<Integer, CantoApi> apiConnectionPool;
 
   private @Nullable CentralCache centralCache = null;
 
   private @Nullable RequestLimiter singleFetchRequestLimiter = null;
   private @Nullable RequestLimiter batchFetchRequestLimiter = null;
+  private @Nullable RequestLimiter searchRequestLimiter = null;
 
   private ServiceConfiguration serviceConfiguration;
 
@@ -52,7 +68,18 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     final CantoServiceConnection connection = CantoServiceConnection.fromConfig(config);
     if (!apiConnectionPool.containsKey(connection.getConnectionId())) {
 
-      final CantoApi cantoApi = new CantoApi(config.getTenant(), config.getOAuthBaseUrl(), config.getAppId(), config.getAppSecret(), config.getUserId(), singleFetchRequestLimiter, batchFetchRequestLimiter, new ProjectBoundCacheAccess(centralCache));
+      final CantoApi cantoApi = new CantoApi.Builder()
+          .tenant(config.getTenant())
+          .oAuthBaseUrl(config.getOAuthBaseUrl())
+          .appId(config.getAppId())
+          .appSecret(config.getAppSecret())
+          .userId(config.getUserId())
+          .singleFetchRequestLimiter(singleFetchRequestLimiter)
+          .batchFetchRequestLimiter(batchFetchRequestLimiter)
+          .searchRequestLimiter(searchRequestLimiter)
+          .projectBoundCacheAccess(new ProjectBoundCacheAccess(centralCache))
+          .rateLimitRetryCount(serviceConfiguration.rateLimitRetryCount)
+          .build();
 
       apiConnectionPool.put(connection.getConnectionId(), cantoApi);
 
@@ -80,28 +107,27 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
   }
 
   @Nullable @Override public List<@Nullable CantoAssetDTO> fetchAssetsByIdentifiers(@NotNull final CantoServiceConnection connection, @NotNull final List<CantoAssetIdentifier> identifiers) {
-
-    Logging.logInfo("[fetchAssetsByIdentifiers] " + Strings.implode(identifiers, ", "), getClass());
+    Logging.logDebug("[fetchAssetsByIdentifiers] " + Strings.implode(identifiers, ", "), getClass());
     final CantoApi cantoApi = getApiInstance(connection);
 
     if (cantoApi == null) {
-      //Connection is invalid. Return null, caller can try to revalidate Connection
+      // Connection is invalid. Return null, caller can try to revalidate Connection
       return null;
     }
 
     return cantoApi.fetchAssets(identifiers)
         .stream()
         .map(CantoAssetDTOFactory::fromAsset)
-        .collect(Collectors.toList());
+        .toList();
   }
 
 
   @Nullable @Override public CantoSearchResultDTO fetchSearch(@NotNull final CantoServiceConnection connection, @NotNull final CantoSearchParams params) {
-    Logging.logInfo("[fetchSearch] " + params, getClass());
+    Logging.logDebug("[fetchSearch] " + params, getClass());
     final CantoApi cantoApi = getApiInstance(connection);
 
     if (cantoApi == null) {
-      //Connection is invalid. Return null, caller can try to revalidate Connection
+      // Connection is invalid. Return null, caller can try to revalidate Connection
       return null;
     }
 
@@ -113,7 +139,7 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     final CantoApi cantoApi = getApiInstance(connection);
 
     if (cantoApi == null) {
-      //Connection is invalid. Return null, caller can try to revalidate Connection
+      // Connection is invalid. Return null, caller can try to revalidate Connection
       return null;
     }
 
@@ -132,18 +158,20 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
     this.serviceConfiguration = ServiceConfiguration.fromServerEnvironment(serverEnvironment);
 
-    if (serviceConfiguration.useRequestLimiter) {
-      singleFetchRequestLimiter = new RequestLimiter(serviceConfiguration.maxRequestsPerMinute, serviceConfiguration.requestsWithoutDelay, serviceConfiguration.timeBufferInMs);
-
-      batchFetchRequestLimiter = new RequestLimiter(serviceConfiguration.maxRequestsPerMinute, serviceConfiguration.requestsWithoutDelay, serviceConfiguration.timeBufferInMs);
-    } else {
-      singleFetchRequestLimiter = null;
-      batchFetchRequestLimiter = null;
-    }
+    singleFetchRequestLimiter = serviceConfiguration.useSingleFetchRequestLimiter
+        ? new RequestLimiter(serviceConfiguration.singleFetchMaxRequestsPerMinute, serviceConfiguration.singleFetchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+        : null;
+    batchFetchRequestLimiter = serviceConfiguration.useBatchFetchRequestLimiter
+        ? new RequestLimiter(serviceConfiguration.batchFetchMaxRequestsPerMinute, serviceConfiguration.batchFetchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+        : null;
+    searchRequestLimiter = serviceConfiguration.useSearchRequestLimiter
+        ? new RequestLimiter(serviceConfiguration.searchMaxRequestsPerMinute, serviceConfiguration.searchRequestsWithoutDelay, serviceConfiguration.timeBufferInMs)
+        : null;
 
     if (serviceConfiguration.useCache) {
       CantoApi cantoApi = getCantoApi();
       centralCache = new CentralCache(cantoApi, serviceConfiguration.cacheSize, serviceConfiguration.cacheUpdateTimespanMs, serviceConfiguration.cacheUpdateTimespanMs, serviceConfiguration.cacheItemInUseTimespanMs, serviceConfiguration.batchUpdateSize);
+      loadPersistedCache();
     } else {
       centralCache = null;
     }
@@ -155,35 +183,88 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
     CantoApi cantoApi = null;
     if (!serviceConfiguration.apiTenant.isBlank() && !serviceConfiguration.apiOAuthBaseUrl.isBlank() && !serviceConfiguration.apiAppId.isBlank() && !serviceConfiguration.apiAppSecret.isBlank() && !serviceConfiguration.apiUserId.isBlank()) {
 
-      cantoApi = new CantoApi(serviceConfiguration.apiTenant, serviceConfiguration.apiOAuthBaseUrl, serviceConfiguration.apiAppId, serviceConfiguration.apiAppSecret, serviceConfiguration.apiUserId, singleFetchRequestLimiter, batchFetchRequestLimiter,
-                              // cantoApi of Cache must not use the cache itself
-                              new ProjectBoundCacheAccess(null),
-                              // We need a very long Timeout, since batch fetches on Canto Side are very slow atm
-                              50);
+      cantoApi = new CantoApi.Builder()
+          .tenant(serviceConfiguration.apiTenant)
+          .oAuthBaseUrl(serviceConfiguration.apiOAuthBaseUrl)
+          .appId(serviceConfiguration.apiAppId)
+          .appSecret(serviceConfiguration.apiAppSecret)
+          .userId(serviceConfiguration.apiUserId)
+          .singleFetchRequestLimiter(singleFetchRequestLimiter)
+          .batchFetchRequestLimiter(batchFetchRequestLimiter)
+          .searchRequestLimiter(searchRequestLimiter)
+          .projectBoundCacheAccess(new ProjectBoundCacheAccess(null))
+          .timeoutInSeconds(50)
+          .rateLimitRetryCount(serviceConfiguration.rateLimitRetryCount)
+          .build();
     }
     return cantoApi;
   }
 
   @Override public void stop() {
-    //apiConnectionPool.forEach((key, value) -> value.close());
     apiConnectionPool = null;
 
     if (centralCache != null) {
+      persistCache();
       centralCache.shutdown();
     }
     centralCache = null;
 
     batchFetchRequestLimiter = null;
     singleFetchRequestLimiter = null;
+    searchRequestLimiter = null;
 
     Logging.logInfo("[stop] CantoSaasServerService stopped", this.getClass());
+  }
+
+  private void persistCache() {
+    if (centralCache == null) {
+      return;
+    }
+    try {
+      List<CachePersistenceEntry> entries = centralCache.getEntriesForPersistence();
+
+      FileHandle cacheFile = obtainDataFileHandle(CACHE_FILE_NAME);
+      try (OutputStream out = cacheFile.getOutputStream(false)) {
+        out.write(CACHE_ADAPTER.toJson(entries).getBytes(StandardCharsets.UTF_8));
+      }
+      Logging.logInfo("[persistCache] Persisted " + entries.size() + " cache entries to " + cacheFile.getPath(), getClass());
+    } catch (Exception e) {
+      Logging.logWarning("[persistCache] Failed to persist cache", e, getClass());
+    }
+  }
+
+  private void loadPersistedCache() {
+    if (centralCache == null) {
+      return;
+    }
+    try {
+      FileHandle cacheFile = obtainDataFileHandle(CACHE_FILE_NAME);
+      if (!cacheFile.exists() || !cacheFile.isFile()) {
+        Logging.logInfo("[loadPersistedCache] No persisted cache file found, starting with empty cache.", getClass());
+        return;
+      }
+      try (InputStream in = cacheFile.load()) {
+        String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        List<CachePersistenceEntry> entries = CACHE_ADAPTER.fromJson(json);
+        if (entries != null) {
+          centralCache.loadPersistedEntries(entries);
+        }
+      }
+    } catch (Exception e) {
+      Logging.logWarning("[loadPersistedCache] Failed to load persisted cache, starting with empty cache", e, getClass());
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private FileHandle obtainDataFileHandle(String name) throws IOException {
+    return ((de.espirit.firstspirit.io.FileSystem<FileHandle>) serverEnvironment.getDataDir()).obtain(name);
   }
 
   @Override public boolean isRunning() {
     return apiConnectionPool != null;
   }
 
-  @Override public Class<? extends CantoSaasService> getServiceInterface() {
+  @Override public @NotNull Class<? extends CantoSaasService> getServiceInterface() {
     return CantoSaasService.class;
   }
 
@@ -205,5 +286,12 @@ public class CantoSaasServiceImpl implements CantoSaasService, Service<CantoSaas
 
   @Override public void updated(final String s) {
     // stub
+  }
+
+  @Override
+  public void logCacheStatus() {
+    if (centralCache != null) {
+      centralCache.logCacheStatus();
+    }
   }
 }

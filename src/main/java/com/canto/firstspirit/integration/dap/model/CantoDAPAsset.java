@@ -310,4 +310,16 @@ public class CantoDAPAsset {
     return "[CantoDAPAsset: " + this.assetIdentifier + "]";
   }
 
+  @Override
+  public boolean equals(Object obj) {
+    if (obj instanceof CantoDAPAsset cantoDAPAsset) {
+      return this.getJsonIdentifier().equals(cantoDAPAsset.getJsonIdentifier());
+    } else {
+      return false;
+    }
+  }
+
+  public int hashCode() {
+    return this.getJsonIdentifier().hashCode();
+  }
 }

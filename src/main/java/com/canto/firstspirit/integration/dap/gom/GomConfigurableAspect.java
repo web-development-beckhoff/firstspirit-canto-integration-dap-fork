@@ -12,6 +12,8 @@ import de.espirit.firstspirit.client.plugin.dataaccess.aspects.GomConfigurable;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.Serial;
+
 public class GomConfigurableAspect implements GomConfigurable {
 
   private CumulusGomConfigurable _gom;
@@ -36,6 +38,7 @@ public class GomConfigurableAspect implements GomConfigurable {
   @SuppressWarnings("unused")
   public static class CumulusGomConfigurable extends AbstractGomElement implements GomCheckable {
 
+    @Serial
     private static final long serialVersionUID = -5112037660541802640L;
     private Filter _filter;
 
@@ -57,13 +60,14 @@ public class GomConfigurableAspect implements GomConfigurable {
     public void verify() throws IllegalStateException {
     }
 
-    public void validate(GomCheckable.Context context) throws GomValidationError {
+    public void validate(Context context) throws GomValidationError {
       Logging.logInfo("[VALIDATE]" + context.getElement() + context.getProvider(), this.getClass());
       this.verify();
     }
 
     public static class Filter extends AbstractGomElement {
 
+      @Serial
       private static final long serialVersionUID = -4066644293406623904L;
       private CantoScheme scheme;
 

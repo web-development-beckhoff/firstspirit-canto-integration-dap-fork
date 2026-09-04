@@ -4,8 +4,10 @@ import com.canto.firstspirit.api.CantoApi;
 import com.canto.firstspirit.api.CantoAssetIdentifierFactory;
 import com.canto.firstspirit.api.model.CantoAsset;
 import com.canto.firstspirit.service.cache.model.CacheElement;
+import com.canto.firstspirit.service.cache.model.CachePersistenceEntry;
 import com.canto.firstspirit.service.server.model.CantoAssetIdentifier;
 import de.espirit.common.base.Logging;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import org.jetbrains.annotations.Nullable;
 
@@ -140,6 +142,44 @@ public class CentralCache {
     cacheMap.clear();
   }
 
+  /**
+   * Collect all current cache entries for persistence.
+   *
+   * @return list of cache entries suitable for serialization
+   */
+  public List<CachePersistenceEntry> getEntriesForPersistence() {
+    return cacheMap.values()
+        .stream()
+        .map(el -> new CachePersistenceEntry(el.asset, el.lastUsedTimestamp, el.lastUpdatedTimestamp))
+        .toList();
+  }
+
+  /**
+   * Populate the cache from persisted entries. All entries are loaded.
+   * All loaded entries have their lastUsedTimestamp reset to now so the CacheUpdater keeps them.
+   *
+   * @param entries list of persisted cache entries
+   */
+  public void loadPersistedEntries(List<CachePersistenceEntry> entries) {
+    long now = System.currentTimeMillis();
+    int loaded = 0;
+    for (CachePersistenceEntry entry : entries) {
+      if (entry.asset == null) {
+        continue;
+      }
+      String cacheId = CantoAssetIdentifierFactory.fromCantoAsset(entry.asset).getPath();
+      CacheElement element = new CacheElement(entry.asset, cacheItemLifespanMs, cacheItemInUseTimespanMs);
+      if (entry.lastUsedTimestamp > 0) {
+        element.lastUsedTimestamp = now;
+      }
+      element.lastUpdatedTimestamp = entry.lastUpdatedTimestamp;
+      cacheMap.put(cacheId, element);
+      cacheUpdater.addToUpdateBatch(cacheId);
+      loaded++;
+    }
+    Logging.logInfo("[CentralCache] Loaded " + loaded + " of " + entries.size() + " persisted entries", this.getClass());
+  }
+
   public void shutdown() {
     Logging.logInfo("[CentralCache] shutting down.", this.getClass());
     clear();
@@ -148,5 +188,29 @@ public class CentralCache {
 
   @Override public String toString() {
     return "CentralCache{" + "cacheItemLifespanMs=" + cacheItemLifespanMs + ", cacheUpdateTimespanMs=" + cacheUpdateTimespanMs + ", cacheItemInUseTimespanMs=" + cacheItemInUseTimespanMs + ", maxCacheSize=" + maxCacheSize + '}';
+  }
+
+  /**
+   * Logs the current cache status: total size, load, elements still in use, invalid elements, and update batch count.
+   */
+  public void logCacheStatus() {
+    int total = cacheMap.size();
+    int inUse = 0;
+    int notInUse = 0;
+    int invalid = 0;
+
+    for (CacheElement element : cacheMap.values()) {
+      if (element.isStillInUse()) {
+        inUse++;
+      } else {
+        notInUse++;
+      }
+      if (!element.isValid()) {
+        invalid++;
+      }
+    }
+
+    int cacheLoad = (int) ((total / (double) maxCacheSize) * 100);
+    Logging.logInfo(String.format("[CacheUpdater] Cache Status: size=%d/%d (%d%%) | inUse=%d | notInUse=%d | invalid=%d", total, maxCacheSize, cacheLoad, inUse, notInUse, invalid), this.getClass());
   }
 }

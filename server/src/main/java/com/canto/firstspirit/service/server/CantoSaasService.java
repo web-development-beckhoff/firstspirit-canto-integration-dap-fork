@@ -61,4 +61,6 @@ public interface CantoSaasService {
    * @throws IllegalStateException if required configuration values are missing or invalid
    */
   @NotNull CantoConfiguration getConfiguration( final long projectId);
+
+  void logCacheStatus();
 }
